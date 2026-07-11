@@ -1,0 +1,78 @@
+name: rust-ci
+
+# Reusable push/PR CI for Rust CLIs. ONE job: pure Rust checks via `otto ci`, and
+# nothing else. Identical in the tatari-tv and scottidler org twins.
+#
+# Why otto, not native cargo steps: each repo already defines its exact check flags
+# in .otto.yml (whitespace, clippy, fmt, test), and otto runs them in parallel. The
+# workflow does environment prep (checkout, toolchain, cache); otto runs the checks.
+# Running `otto ci` here makes green-local equal green-CI by construction - a native
+# re-encoding of clippy/fmt/test would be a second definition that silently drifts.
+# A repo without an `otto ci` task is an outlier, not a fallback path; there is no
+# use-otto toggle.
+#
+# No secret-scanning / gitleaks job by design: that is owned one layer up by the
+# org-required "Tatari Org Security" workflow, which runs on every repo regardless of
+# language or CI. Baking it in here would duplicate that gate and only cover
+# rust-repos-using-rust-ci anyway. This keeps the twin byte-identical across orgs.
+#
+# The CALLER owns the trigger. Typical caller:
+#   on: { push: { branches: ['**'] }, pull_request: {} }
+
+on:
+  workflow_call:
+    inputs:
+      rust-version:
+        description: "Rust toolchain version."
+        required: false
+        type: string
+        default: "1.96.0"
+      private-deps:
+        description: >-
+          Enable private git dependency fetching (CARGO_NET_GIT_FETCH_WITH_CLI +
+          insteadOf token). Requires the private-deps-token secret.
+        required: false
+        type: boolean
+        default: false
+    secrets:
+      private-deps-token:
+        description: "Token for private git deps (used when private-deps=true)."
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: otto ci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Configure private git deps
+        if: ${{ inputs.private-deps }}
+        run: git config --global url."https://x-access-token:${{ secrets.private-deps-token }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ inputs.rust-version }}
+          components: clippy, rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: Set up otto
+        # Pinned to setup-otto main (arch-aware asset suffix). The v1 tag is stale -
+        # it still points at 6d79050, whose Linux suffix is OS-only ("linux"), so it
+        # downloads a nonexistent otto-<ver>-linux.tar.gz ("no assets match the file
+        # pattern"). 0676703 has the linux-amd64/arm64 fix. Re-pin to a tag once
+        # otto-rs/setup-otto re-tags v1 (or cuts v2) onto the fixed commit.
+        uses: otto-rs/setup-otto@0676703d0c225f6c782235e181e4498a7726e4b5 # main (arch fix; v1 is stale)
+
+      - name: otto ci
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: ${{ inputs.private-deps }}
+        run: otto ci
