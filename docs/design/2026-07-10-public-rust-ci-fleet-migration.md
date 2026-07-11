@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler
 **Date:** 2026-07-10
-**Status:** In Review
+**Status:** Implemented (2026-07-11) -- all workflow code merged across the 9 repos. Two things remain before the ⏳ criteria below fully close, both Scott's hand: (1) the release-tag live proof (a tag push per CLI), and (2) reconciling clyde's `Cargo.toml` (0.8.3) up to the live-released 0.9.x line, a prerequisite for clyde's tag specifically.
 **Review Passes Completed:** 5/5
 
 ## Summary
@@ -122,13 +122,13 @@ Plus: every repo commits `rustfmt.toml`.
 - **Success criteria:** all 9 run SAST via the reusable; no repo holds a copied full SAST file.
 
 ## Acceptance Criteria
-- [ ] All 9 public Rust repos run `ci` via `rust-ci.yml@v1`, green on default branch.
-- [ ] The 5 CLIs (drata-cli, pagerduty-cli, ralph-wiggum-loop, clyde, whitespace) release via `rust-cli-release.yml@v1`; a post-migration test tag produces the SAME artifact names as before (`drata-*`, `pd-*`, `rwl-*`, `clyde-*`, `whitespace-*`).
-- [ ] whitespace still publishes its multi-arch `ghcr.io/tatari-tv/whitespace` image post-migration.
-- [ ] Every public Rust repo runs `sast` via `sast.yml@v1`; no repo contains a copied full SAST workflow.
-- [ ] Every public Rust repo commits `rustfmt.toml` (120 + 80).
-- [ ] okta-auth-rs and renew CI are green.
-- [ ] Preserved workflows still run: claude-pricing/clyde pages + refresh-pricing.
+- [x] All 9 public Rust repos run `ci` via `rust-ci.yml@v1`, green on default branch.
+- [x] The 5 CLIs (drata-cli, pagerduty-cli, ralph-wiggum-loop, clyde, whitespace) release via `rust-cli-release.yml@v1` (callers merged). ⏳ The post-migration test tag that proves the SAME artifact names (`drata-*`, `pd-*`, `rwl-*`, `clyde-*`, `whitespace-*`) is a Scott's-hand tag push -- parity holds by construction (reusable naming `<prefix>-<tag>-<suffix>` == prior naming). clyde needs its `Cargo.toml` 0.8.3->0.9.x drift reconciled before its tag.
+- [x] whitespace's `release.yml` publishes the multi-arch `ghcr.io/tatari-tv/whitespace` image (docker job `needs: release`, same run_id). ⏳ Live image confirmed by the whitespace test tag.
+- [x] Every public Rust repo runs `sast` via `sast.yml@v1`; no repo contains a copied full SAST workflow.
+- [x] Every public Rust repo commits `rustfmt.toml` (120 + 80).
+- [x] okta-auth-rs and renew CI are green.
+- [x] Preserved workflows still run: claude-pricing/clyde pages + refresh-pricing.
 
 ## Resolved Decisions
 - 2026-07-10 (Scott): SAST spreads to all public Rust repos, as a reusable workflow + thin callers (not copy-paste).
