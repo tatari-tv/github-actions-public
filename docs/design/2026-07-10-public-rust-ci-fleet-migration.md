@@ -96,7 +96,8 @@ Plus: every repo commits `rustfmt.toml`.
 #### Phase 3: SAST reusable extraction
 **Model:** sonnet
 - Add `github-actions-public/.github/workflows/sast.yml` (`on: workflow_call`), lifted from clyde verbatim (Semgrep/Checkov/Trivy, audit, public actions, SHA-pinned). Move the `@v1` major tag to include it.
-- **Success criteria:** a `uses: .../sast.yml@v1` caller runs all three scanners, uploads SARIF, never blocks.
+- Permissions / fork PRs: the reusable keeps `permissions: contents: read` and publishes SARIF via `actions/upload-artifact` + a step-summary (clyde's existing approach), NOT `github/codeql-action/upload-sarif`. So it needs no `security-events: write` and runs safely on public fork PRs (the read-only fork token can still upload artifacts). Findings surface on the run, not in the repo's code-scanning tab.
+- **Success criteria:** a `uses: .../sast.yml@v1` caller runs all three scanners on a fork PR with only `contents: read`, uploads the SARIF artifact + step-summary, never blocks.
 
 #### Phase 4: CI migration
 **Model:** sonnet
@@ -106,13 +107,13 @@ Plus: every repo commits `rustfmt.toml`.
 
 #### Phase 5: Release migration
 **Model:** sonnet
-- Thin `rust-cli-release@v1` callers for drata-cli (`bin-names: drata`, `archive-prefix: drata`), pagerduty-cli (`pd`/`pd`), ralph-wiggum-loop (`rwl`/`rwl`), and **clyde** (bin `clyde` == repo name, no override; swaps its vendored release for the caller). whitespace's release is Phase 6 (docker). Missing the bin override is a HARD failure, not a rename: `rust-cli-release` does `cp target/.../release/<archive-prefix-default=repo-name>`, which errors when the binary is `drata`/`pd`/`rwl`, killing the release job.
+- Thin `rust-cli-release@v1` callers for drata-cli (`bin-names: drata`, `archive-prefix: drata`), pagerduty-cli (`pd`/`pd`), ralph-wiggum-loop (`rwl`/`rwl`), and **clyde** (bin `clyde` == repo name, no override; swaps its vendored release for the caller). whitespace's release is Phase 6 (docker). The two inputs do different jobs: `bin-names` lists the binaries `cp`'d from `target/.../release/` (defaults to the repo name), while `archive-prefix` only names the tarball + `.sha256` (also defaults to repo name). So for drata/pd/rwl, omitting `bin-names` is a HARD failure (`cp target/.../release/drata-cli` errors — the binary is `drata`), while omitting `archive-prefix` merely renames the published artifact (`drata-cli-*` instead of `drata-*`). Both must be set; clyde needs neither (bin == repo name).
 - **Success criteria:** a REAL test tag on each produces byte-for-byte identically-named tarballs+sha256 (`pd-vX-*`, `drata-vX-*`, `rwl-vX-*`, `clyde-vX-*`).
 
 #### Phase 6: whitespace (release + docker in ONE workflow)
 **Model:** opus
 - whitespace's docker job `needs: build-linux` and consumes same-run artifacts via `download-artifact@v4` (`build-contexts: binaries=artifacts/`). `download-artifact@v4` is scoped to `run_id`, so a SEPARATE `docker-publish.yml` on the same tag (different run) CANNOT see those artifacts and would fail immediately.
-- Correct shape: keep docker in whitespace's `release.yml` **caller** as a `docker:` job with `needs: release` (the reusable runs in the caller's run_id, so its uploaded per-target tarballs are downloadable by the sibling docker job). release half = `uses: rust-cli-release.yml@v1`; docker half = the existing buildx→ghcr job, now depending on the reusable and pulling the same artifact names the reusable produces (`whitespace-<tag>-linux-amd64/arm64`).
+- Correct shape: keep docker in whitespace's `release.yml` **caller** as a `docker:` job with `needs: release` (the reusable runs in the caller's run_id, so its uploaded per-target tarballs are downloadable by the sibling docker job). release half = `uses: rust-cli-release.yml@v1`; docker half = the existing buildx→ghcr job, now depending on the reusable and downloading by ARTIFACT name (`whitespace-linux-amd64`, `whitespace-linux-arm64` — the reusable's `upload-artifact` names), not the tarball filename. The tarball file *inside* each artifact is `whitespace-<tag>-linux-<arch>.tar.gz`, which the docker job extracts into `artifacts/` for `build-contexts: binaries=artifacts/`.
 - **Success criteria:** a test tag yields all 4 tarballs AND a pushed multi-arch `ghcr.io/tatari-tv/whitespace` image, from a single workflow run.
 
 #### Phase 7: SAST callers
