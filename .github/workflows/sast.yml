@@ -34,6 +34,11 @@ jobs:
       # action keeps this resolvable in ANY context (repo-local test CI or
       # org-injected required workflow) without depending on internal-action access.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          # Do not persist the job token in .git/config: this workflow scans
+          # untrusted fork-PR content, so the checkout should leave no credentials
+          # behind (matches rust-ci.yml). zizmor: artipacked.
+          persist-credentials: false
 
       - name: Install Semgrep (OSS)
         run: pipx install semgrep
@@ -102,6 +107,11 @@ jobs:
       # action keeps this resolvable in ANY context (repo-local test CI or
       # org-injected required workflow) without depending on internal-action access.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          # Do not persist the job token in .git/config: this workflow scans
+          # untrusted fork-PR content, so the checkout should leave no credentials
+          # behind (matches rust-ci.yml). zizmor: artipacked.
+          persist-credentials: false
 
       # Required-workflow `on: paths:` filters are IGNORED, so skip at runtime:
       # only scan when the repo actually has IaC to scan.
@@ -173,6 +183,11 @@ jobs:
       # action keeps this resolvable in ANY context (repo-local test CI or
       # org-injected required workflow) without depending on internal-action access.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2
+        with:
+          # Do not persist the job token in .git/config: this workflow scans
+          # untrusted fork-PR content, so the checkout should leave no credentials
+          # behind (matches rust-ci.yml). zizmor: artipacked.
+          persist-credentials: false
 
       - name: Scan filesystem (vuln + misconfig; secrets OFF per Q5)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
