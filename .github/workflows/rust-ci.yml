@@ -34,6 +34,13 @@ on:
         required: false
         type: boolean
         default: false
+      whitespace-version:
+        description: >-
+          tatari-tv/whitespace release tag to install. Every repo's `otto ci`
+          lint task runs `whitespace -r`, so the binary must be on PATH.
+        required: false
+        type: string
+        default: "v0.1.6"
     secrets:
       private-deps-token:
         description: "Token for private git deps (used when private-deps=true)."
@@ -71,6 +78,26 @@ jobs:
         # pattern"). 0676703 has the linux-amd64/arm64 fix. Re-pin to a tag once
         # otto-rs/setup-otto re-tags v1 (or cuts v2) onto the fixed commit.
         uses: otto-rs/setup-otto@0676703d0c225f6c782235e181e4498a7726e4b5 # main (arch fix; v1 is stale)
+
+      - name: Set up whitespace
+        # Every tatari rust repo's `otto ci` lint task runs `whitespace -r`
+        # (org convention), so the whitespace binary is a hard runtime dep of
+        # `otto ci` and must be installed here alongside otto. Downloaded from
+        # the public tatari-tv/whitespace release tarballs (no auth, no compile).
+        env:
+          WS_VERSION: ${{ inputs.whitespace-version }}
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) ws_suffix=linux-amd64 ;;
+            aarch64|arm64) ws_suffix=linux-arm64 ;;
+            *) echo "::error::unsupported arch $(uname -m) for whitespace install"; exit 1 ;;
+          esac
+          url="https://github.com/tatari-tv/whitespace/releases/download/${WS_VERSION}/whitespace-${WS_VERSION}-${ws_suffix}.tar.gz"
+          echo "downloading $url"
+          curl -fsSL "$url" -o /tmp/whitespace.tar.gz
+          sudo tar -xzf /tmp/whitespace.tar.gz -C /usr/local/bin whitespace
+          whitespace --version
 
       - name: otto ci
         env:
