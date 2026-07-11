@@ -176,9 +176,11 @@ passphrase-locked key file and fails. `cargo` builds also need sandbox-off
   Scott; does not affect the caller wiring, only the eventual parity tag.
 
 ### Verification
-- Parity is byte-identical by construction (reusable file/upload naming
-  `<prefix>-<tag>-<suffix>` == every old workflow's naming). Live proof is a real
-  tag on each, which is Scott's hand (git tag-safety). Pending -- see closeout.
+- NAMING/path parity is guaranteed by construction (reusable file + upload
+  naming `<prefix>-<tag>-<suffix>` == every old workflow's naming). Tarball
+  CONTENT parity (checksums / bytes) is NOT proven by naming and is confirmed
+  only by the live tag on each -- a real tag push, Scott's hand (git tag-safety).
+  Pending -- see closeout.
 
 ## Phase 6: whitespace (release + docker in ONE workflow)
 
@@ -207,8 +209,9 @@ passphrase-locked key file and fails. `cargo` builds also need sandbox-off
   release` job here, not its own workflow.
 
 ### Verification
-- Parity by construction for the tarballs; the multi-arch ghcr image is proven
-  only by a real tag (Scott's hand). Pending -- see closeout.
+- Tarball NAMING parity by construction; tarball content parity AND the
+  multi-arch ghcr image are proven only by a real tag (Scott's hand). Pending --
+  see closeout.
 
 ## Phase 7: SAST callers
 
@@ -221,8 +224,11 @@ passphrase-locked key file and fails. `cargo` builds also need sandbox-off
   drata-cli #10, clyde #43, mcp-io-rs #10): PRs, merged by Scott.
 
 ### Verification
-- Proven: all three scanners (Semgrep, Checkov, Trivy) run green via the reusable
-  on the gated PRs. This also retroactively proves Phase 3's success criterion.
+- Proven: all three scanners (Semgrep, Checkov, Trivy) execute via the reusable
+  on the gated PRs and their checks pass as non-blocking audit steps
+  (`continue-on-error: true`) -- "pass" means the jobs ran and reported, NOT a
+  zero-finding assertion. This also retroactively proves Phase 3's success
+  criterion (a caller runs all three scanners with `contents: read`).
 
 ### Deviations / Tradeoffs / Open questions
 - None.

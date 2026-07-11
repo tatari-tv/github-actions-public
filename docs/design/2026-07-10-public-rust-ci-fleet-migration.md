@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler
 **Date:** 2026-07-10
-**Status:** Implemented (2026-07-11) -- all workflow code merged across the 9 repos; the only pending item is the release-tag live proof (criteria marked ⏳ below), which is a Scott's-hand tag push.
+**Status:** Implemented (2026-07-11) -- all workflow code merged across the 9 repos. Two things remain before the ⏳ criteria below fully close, both Scott's hand: (1) the release-tag live proof (a tag push per CLI), and (2) reconciling clyde's `Cargo.toml` (0.8.3) up to the live-released 0.9.x line, a prerequisite for clyde's tag specifically.
 **Review Passes Completed:** 5/5
 
 ## Summary
