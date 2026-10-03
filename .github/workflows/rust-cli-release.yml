@@ -15,7 +15,7 @@ name: rust-cli-release
 # This is the missing half of the org's Rust story.
 #
 # Linux and macOS are SEPARATE jobs (not one matrix with a conditional container):
-# build-linux runs in debian:bookworm, build-macos on the macos-14 host. setup
+# build-linux runs in debian:bookworm, build-macos on the macos-15 host. setup
 # splits the requested targets into per-OS matrices and emits has-linux / has-macos
 # so a single-OS subset skips the other job cleanly.
 #
@@ -216,7 +216,7 @@ jobs:
     name: Build ${{ matrix.suffix }}
     needs: setup
     if: ${{ needs.setup.outputs.has-macos == 'true' }}
-    runs-on: macos-14
+    runs-on: macos-15
     strategy:
       fail-fast: false
       matrix: ${{ fromJson(needs.setup.outputs.macos-matrix) }}
