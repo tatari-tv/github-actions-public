@@ -41,6 +41,13 @@ on:
         required: false
         type: string
         default: "v0.1.6"
+      eza-version:
+        description: >-
+          eza-community/eza release tag to install, for repos whose code or
+          tests shell out to eza (e.g. rkvr's archive metadata). Empty skips it.
+        required: false
+        type: string
+        default: ""
     secrets:
       private-deps-token:
         description: "Token for private git deps (used when private-deps=true)."
@@ -98,6 +105,23 @@ jobs:
           curl -fsSL "$url" -o /tmp/whitespace.tar.gz
           sudo tar -xzf /tmp/whitespace.tar.gz -C /usr/local/bin whitespace
           whitespace --version
+
+      - name: Set up eza
+        if: ${{ inputs.eza-version != '' }}
+        env:
+          EZA_VERSION: ${{ inputs.eza-version }}
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) eza_target=x86_64-unknown-linux-gnu ;;
+            aarch64|arm64) eza_target=aarch64-unknown-linux-gnu ;;
+            *) echo "::error::unsupported arch $(uname -m) for eza install"; exit 1 ;;
+          esac
+          url="https://github.com/eza-community/eza/releases/download/${EZA_VERSION}/eza_${eza_target}.tar.gz"
+          echo "downloading $url"
+          curl -fsSL "$url" -o /tmp/eza.tar.gz
+          sudo tar -xzf /tmp/eza.tar.gz -C /usr/local/bin ./eza
+          eza --version
 
       - name: otto ci
         env:
