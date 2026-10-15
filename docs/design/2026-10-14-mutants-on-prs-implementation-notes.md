@@ -287,3 +287,23 @@ Verdict: **yes**. marquee's tests pass outside its ECR builder container. No `co
 - `dtolnay/rust-toolchain` sets `CARGO_INCREMENTAL=0`, so every per-mutant rebuild here is non-incremental. Setting `CARGO_INCREMENTAL=1` in the shard job may cut `cost`. Not measured. Measure in Phase 2?
 - The private runner has 13-14 GB free. A private repo with a `target/` much larger than clyde's (3.5-4.3 GB in-place peak) may run out of disk even in-place. Phase 2 could free space (remove preinstalled toolchains) or record free disk per shard. Which?
 - This repo's local tag list now holds 59 of clyde's tags, `v0.1.0` through `v0.25.7`, fetched by mistake (no collision with `v1`, `v1.0.1`, `v2.0.0`, `v2.1.0`; local only; `push.followTags` is false; none pushed). The tag rule says never delete a tag without Scott's explicit OK. Delete them locally (`git tag -d`), or leave them?
+
+## Phase 0 follow-up: orchestrator rulings on the Phase 0 open questions
+
+### Design decisions
+- Q1 (Phase 2 "exactly the prewarm survivor"): doc defect. #97's diff carries a second survivor, `sessions/src/db/activity.rs:55:9` (Phase 0 local run, rc 2, 2 missed of 38). Criterion amended to list both.
+- Q2 (`--in-place` vs `--jobs`): the task contract gains a boolean `--in-place` param; the reusable passes `--in-place` and no `--jobs`; passing both is a loud task error. Phase 1 criteria amended to match.
+- Q3 (private push fetch rc 128): a per-command `http.extraheader` carrying `GITHUB_TOKEN` for the `before` fetch only; `persist-credentials: false` stays.
+- Q4 (cache scope): only shard 0 of a `push` run saves; PR runs restore main's cache.
+- Q6 (private disk 13-14G): `df -h` before/after the otto step in every shard log. No space-freeing step until a repo runs out.
+- Sizing defaults from Phase 0 written into the doc's Sizing section.
+
+### Deviations
+- None.
+
+### Tradeoffs
+- Q3 extraheader vs `persist-credentials: true`: the extraheader keeps the token out of `.git/config` for the shard's test run, which executes PR code.
+
+### Open questions
+- Q5 (`CARGO_INCREMENTAL=0` from dtolnay/rust-toolchain): parked; revisit only if per-mutant cost becomes the problem.
+- Q7 (59 clyde tags copied into the local tag list of `github-actions-public`, local only, remote verified clean): left for Scott to delete by hand per the tag rule.
