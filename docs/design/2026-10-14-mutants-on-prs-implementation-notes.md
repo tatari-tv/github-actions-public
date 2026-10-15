@@ -307,3 +307,34 @@ Verdict: **yes**. marquee's tests pass outside its ECR builder container. No `co
 ### Open questions
 - Q5 (`CARGO_INCREMENTAL=0` from dtolnay/rust-toolchain): parked; revisit only if per-mutant cost becomes the problem.
 - Q7 (59 clyde tags copied into the local tag list of `github-actions-public`, local only, remote verified clean): left for Scott to delete by hand per the tag rule.
+
+## Phase 1: Otto task contract
+
+Landed in `tatari-tv/clyde`, worktree `/home/saidler/repos/tatari-tv/clyde-mutants`, branch `mutants-otto-task`, commit `d3b4600` (not pushed). Based on local `origin/main` `399e3b6`.
+
+### Success criteria
+
+| criterion | result |
+|---|---|
+| fixture `otto mutants --diff 97.diff --shard 0/1 --in-place`: `rc` = `2`, `missed.txt` lists the prewarm mutant | PASS: `rc` = `2`; missed.txt has `common/src/repo.rs:196:68: delete ! in Resolver::prewarm` and `sessions/src/db/activity.rs:55:9: replace Db::indexed_rows ...` (38 mutants, 2 missed, 8 caught, 28 unviable, 83s) |
+| `otto mutants --help` lists the four params | PASS: `--diff`, `--shard`, `--jobs`, `--in-place` |
+| `otto mutants --in-place --jobs 2` exits non-zero naming both flags | PASS: `mutants: --in-place and --jobs cannot be used together (--in-place runs one job)`, task exit 2, otto exit 1 |
+| `otto ci` green in the worktree | PASS |
+
+### Design decisions
+- Params are declared as otto `params:` (`--diff`, `--shard`, `--jobs` default `""`; `--in-place` default `false`). otto exposes them as `${diff}`, `${shard}`, `${jobs}`, `${in_place}` (hyphen becomes underscore, verified). Empty string means "not given". File: `.otto.yml` `mutants`.
+- The guard for `--in-place` + `--jobs` runs before any cargo work and exits 2. cargo-mutants rejects the pair anyway; a named message beats its usage dump.
+- `--diff` swaps the 15-entry `-f` list for `--in-diff FILE`; no `-f` is passed, per contract.
+- `--sharding round-robin` is passed only when `--shard` is given: a sharding mode without a shard is meaningless.
+- `rc` is written to `./rc` (cwd, where `mutants.out/` lands by default) and the task exits with the same code. `rc` is removed first so a stale one cannot survive a crash before cargo-mutants runs.
+- Without `--jobs` the non-in-place path keeps `--jobs 8`, so the no-arg run is unchanged apart from the added `--annotations auto`. `RAYON_NUM_THREADS = max(1, nproc / jobs)`, with jobs = 1 under `--in-place`.
+
+### Deviations
+- None from the amended contract. The no-arg path also gains `--annotations auto` and `rc` (the contract says "always"), so it is not byte-identical, but its scope, jobs, timeout and `-f` list are unchanged. The no-arg path was not executed (it is the 10-minute local audit); the shared argument assembly was run via the `--diff` fixture.
+
+### Tradeoffs
+- `${MUTANTS_VERSION:-27.1.0}` env override vs a task param: the reusable sets an env var, and a param would not be visible to the install step that runs before otto.
+- Bash arrays for scope/shard/jobs args vs string concatenation: paths and `-f` values stay safely quoted.
+
+### Open questions
+- Branch base: the `git fetch origin` in `/home/saidler/repos/tatari-tv/clyde` could not be executed (this session's Bash cwd resets between calls, and the git-network hook denies `-C`). The worktree was cut from the already-local `origin/main` (`399e3b6`, `docs(design): report agent calls (#106)`). If origin/main has moved, rebase before the PR.
