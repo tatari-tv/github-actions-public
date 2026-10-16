@@ -2,7 +2,7 @@
 
 **Author:** Scott Idler
 **Date:** 2026-10-14
-**Status:** In Review
+**Status:** Implemented
 **Review Passes Completed:** 5/5; review-panel round 1 folded in
 
 ## Summary
@@ -61,6 +61,7 @@ Add a reusable `mutants.yml` workflow to `github-actions-public` that runs `carg
 - private and public repos are both in scope (Scott, 2026-10-14)
 - archived and forked repos are out
 - the authoritative list is generated in Phase 6 from the GitHub API, not hand-kept
+- Phase 6 reconciliation (2026-10-15): `tatari-tv` is 19 Rust repos, not 21. Of the 21 counted above, `claude-pricing` is archived and `vault-for-brands-api` is Python; `clyde` was onboarded in Phases 1 and 4; `auth-client-rs` (Rust, no local clone) was missed. Processed: 51 `scottidler` + 18 `tatari-tv` = 69; 43 onboarded, 26 skipped (see Open Questions).
 
 ## Proposed Solution
 
@@ -279,18 +280,22 @@ Ship order: `github-actions-public` -> `scaffold` -> fleet callers. Each phase i
 
 ## Acceptance Criteria
 
-- [ ] The Phase 4 canary PR on `tatari-tv/clyde` gets one sticky comment naming a missed `delete !` mutant in `Resolver::prewarm`.
-  - Cannot run yet: needs Phases 1-4. Precondition observed 2026-10-14 on a scratch clone at `b530468`, `cargo mutants --list --in-diff 97.diff --workspace`: exit 0, 38 lines, line 2 = `common/src/repo.rs:196:68: delete ! in Resolver::prewarm`. Same command without `--workspace`: 0 lines.
-- [ ] A PR with no mutable `.rs` lines runs zero shard jobs.
-  - Cannot run yet: needs Phase 2. Precondition observed 2026-10-14 at `1b30141` (test-only, 29 insertions): `cargo mutants --list --in-diff 102.diff --workspace` exits 0, stderr `INFO No mutants to filter`; with `--json`, stdout is empty, not `[]`.
-- [ ] No in-scope repo lists the mutants check context as required, in classic protection or rulesets.
+- [x] The Phase 4 canary PR on `tatari-tv/clyde` gets one sticky comment naming a missed `delete !` mutant in `Resolver::prewarm`.
+  - Verified 2026-10-15: clyde #110 (closed unmerged) sticky comment `## mutants: 1 surviving mutant(s) in this change` lists `missed common/src/repo.rs:196:70: delete ! in Resolver::prewarm`; run https://github.com/tatari-tv/clyde/actions/runs/38838642734 red, as designed.
+  - Precondition observed 2026-10-14 on a scratch clone at `b530468`, `cargo mutants --list --in-diff 97.diff --workspace`: exit 0, 38 lines, line 2 = `common/src/repo.rs:196:68: delete ! in Resolver::prewarm`. Same command without `--workspace`: 0 lines.
+- [x] A PR with no mutable `.rs` lines runs zero shard jobs.
+  - Verified 2026-10-15: scottidler/mutants-probe #2 run 38824642414 logs `mutants: 0 -> 0 shard(s)`, shard job skipped, verdict `clean`; same on clyde #109 (`.otto.yml`/YAML only) and its push to main (run 38842269145).
+  - Precondition observed 2026-10-14 at `1b30141` (test-only, 29 insertions): `cargo mutants --list --in-diff 102.diff --workspace` exits 0, stderr `INFO No mutants to filter`; with `--json`, stdout is empty, not `[]`.
+- [x] No in-scope repo lists the mutants check context as required, in classic protection or rulesets.
+  - Verified 2026-10-15 across all 44 in-scope repos (43 fleet + clyde): 37 have no classic protection (404) and no required-status rules; the 7 protected (clyde, atlassian-cli, mcp-io-rs, okta-auth-rs, rust-axum-svc, slack-cli, valet) list no context matching `mutants` in `required_status_checks` or any ruleset.
   - Observed on clyde main 2026-10-14: classic protection `.required_status_checks` = `null`; rulesets = `["deletion","non_fast_forward","workflows"]`, required contexts `[]`. Re-run across the fleet in Phase 6.
-- [ ] A fresh `scaffold` repo contains `.github/workflows/mutants.yml` and a `mutants:` otto task, and its fixture survivor is reported.
-  - Cannot run yet: needs Phase 5. Observed 2026-10-14: `grep -c mutants scaffold/src/templates.rs` = 0.
+- [x] A fresh `scaffold` repo contains `.github/workflows/mutants.yml` and a `mutants:` otto task, and its fixture survivor is reported.
+  - Verified 2026-10-15 with installed scaffold v0.2.0: generated repo has `.github/workflows/{ci,mutants,release}.yml` (caller `@v2.2.0`), `.otto.yml` `mutants:` task, `.gitignore` with `/rc` and `mutants.out*`. Fixture: untested `double` -> `rc` 2, `missed.txt` lists `replace * with + in double`; with a test -> `rc` 0; a `w/`-prefixed diff is refused.
+  - Observed 2026-10-14: `grep -c mutants scaffold/src/templates.rs` = 0.
 - [ ] Every in-scope repo has a completed `mutants.yml` run.
-  - Cannot run yet: needs Phase 6.
+  - Partial, 2026-10-15: 44 repos onboarded and `completed/success` on main (43 fleet: 37 direct pushes, 6 gated merges; plus clyde run 38854360037 on the #113 merge). Not yet onboarded: 26 skipped repos (21 already fail `otto ci` on main, 4 lack an otto CI setup, second-brain's baseline fails on workspace-level features) and `auth-client-rs`. Stays unchecked until the fleet-scope open question is ruled: onboard them, or record them as excluded in Scope.
 - [ ] A push to main with an untested change fails the run and emails the pusher.
-  - Cannot run yet: needs Phase 2.
+  - Run half verified 2026-10-15: scottidler/mutants-probe run 38825348002 fails with the untested fn in the summary and annotations. Email half UNVERIFIED: the pusher's address (`scott.a.idler@gmail.com`) is not readable from this session; Scott to confirm.
 
 ## Resolved Decisions
 
@@ -302,6 +307,8 @@ Ship order: `github-actions-public` -> `scaffold` -> fleet callers. Each phase i
 - 2026-10-14, author + panel round 1 (both accept): **fork PRs get annotations + summary, no comment.** A `workflow_run` two-stage commenter is parked; revisit when fork PRs become common (1 in the sampled history).
 - 2026-10-14, author + panel round 1 (staff accept after contract repair; architect's objection misread the design): **the shard step calls `otto mutants`**, with the contract above (raw `rc`, version source, features, sharding mode).
 - 2026-10-15, Scott: **trigger on `pull_request` and `push` to main.** Sampled `scottidler` repos land 0% of commits through PRs (bump 0/19, manifest 0/20, gx 0/27, second-brain 0/300), so PR-only never fires there. Folded in: explicit `before` fetch with "incomplete" on a zero or missing SHA, per-SHA push concurrency with no cancellation, a failed-run email proof in Phase 2.
+- 2026-10-15, Scott: **everything on Rust 1.99.** Reusable defaults moved to `1.99.1` in `v2.3.0` (1.99.1 fixes a 1.99.0 x86_64 FFI bool-return miscompilation); fleet callers pin `@v2.3.0` and `rust-version: "1.99.1"`, except `platform-standard-ci` callers, which pin `"1.99"` because base-images publishes minor tags only (`base/rust:1.99-builder-base`).
+- 2026-10-15, Scott (merged slack-cli #75 with the thread open): **non-member crates are out of diff scope.** `--workspace` does not reach slack-cli's `valet-client`; a PR touching only it reports clean. Accepted as a known limit.
 - 2026-10-15, Scott: **`mutants.yml` lives in `github-actions-public` only**, called by public and private repos alike. Private-to-public calls already work (`atlassian-cli` calls `sast.yml@v2.1.0`), it touches no ECR/internal registry/CodeArtifact (`README.md:9`), and a second internal copy would drift like `rust-ci.yml` did (internal `github-actions#663`). Exception: if Phase 0 shows marquee needs its ECR builder container, marquee gets its own caller path.
 
 ## Alternatives Considered
@@ -365,6 +372,9 @@ Ship order: `github-actions-public` -> `scaffold` -> fleet callers. Each phase i
 ## Open Questions
 
 None. The scottidler trigger question is resolved (push:main, 2026-10-15, under Resolved Decisions).
+
+- [ ] **Fleet scope.** 26 Rust repos were skipped (21 fail `otto ci` on main, 4 lack an otto CI setup, second-brain's baseline fails on workspace-level features) and `auth-client-rs` has no local clone. Onboard them (fix CI first) or record them as excluded.
+- [ ] **Push-failure email.** Confirm GitHub's "Run failed" email for scottidler/mutants-probe run 38825348002 reached scott.a.idler@gmail.com.
 
 ## References
 
