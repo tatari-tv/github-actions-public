@@ -35,7 +35,7 @@ jobs:
   ci:
     uses: tatari-tv/github-actions-public/.github/workflows/rust-ci.yml@v1
     # with:
-    #   rust-version: "1.96.0"   # default
+    #   rust-version: "1.99.0"   # default
     #   private-deps: true       # only if you pull a PRIVATE git dep
     # secrets:
     #   private-deps-token: ${{ secrets.ACTIONS_CLONE_SUBMODULE_TOKEN }}
@@ -98,7 +98,7 @@ The caller grants `pull-requests: write`. The workflow narrows that: only the re
 
 | input | type | default | purpose |
 |---|---|---|---|
-| `rust-version` | string | `1.96.0` | toolchain |
+| `rust-version` | string | `1.99.0` | toolchain |
 | `target-wall` | number | `600` | seconds one shard should spend testing mutants; sizes the shard count |
 | `max-shards` | number | `0` | ceiling on shard runners per run; `0` = runner-class default (public 10, private 6) |
 | `shard-timeout-minutes` | number | `0` | `timeout-minutes` for each shard; `0` = runner-class default (public 45, private 60) |

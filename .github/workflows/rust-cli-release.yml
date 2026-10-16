@@ -46,7 +46,7 @@ on:
         description: "Rust toolchain version."
         required: false
         type: string
-        default: "1.96.0"
+        default: "1.99.0"
       extra-files:
         description: "Space-separated extra files (repo-relative) to include in every tarball, e.g. shell completions."
         required: false
