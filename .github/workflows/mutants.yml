@@ -269,7 +269,9 @@ jobs:
           overwrite: true
 
   shard:
-    name: shard ${{ matrix.shard }}
+    # Static: a run that plans zero shards skips this job, and a matrix
+    # expression in the name renders literally on a skipped job.
+    name: shard
     needs: plan
     if: ${{ needs.plan.result == 'success' && needs.plan.outputs.shards != '0' }}
     runs-on: ubuntu-latest
@@ -495,12 +497,20 @@ jobs:
                 continue
               fi
               jq -r '.outcomes[] | select(.scenario != "Baseline") | .scenario.Mutant.name' "$outcomes" >> "$work/names"
+              # The Baseline scenario carries no .scenario.Mutant, and cargo-mutants
+              # 27.1.0 can emit a baseline Timeout (outcome.rs:265): keep it out of
+              # the survivor and tally queries, and report it as a baseline failure.
+              if jq -e '[.outcomes[] | select(.scenario == "Baseline" and .summary != "Success")] | length > 0' "$outcomes" > /dev/null \
+                && [ "$rc" != 4 ]; then
+                baseline+=("$k")
+              fi
               jq -c --argjson k "$k" '.outcomes[]
+                | select(.scenario != "Baseline")
                 | select(.summary == "MissedMutant" or .summary == "Timeout")
                 | {shard: $k, outcome: (if .summary == "Timeout" then "timeout" else "missed" end),
                    name: .scenario.Mutant.name, file: .scenario.Mutant.file,
                    line: .scenario.Mutant.span.start.line, diff: .diff_path}' "$outcomes" >> "$work/survivors.jsonl"
-              tally() { jq --arg s "$1" '[.outcomes[] | select(.summary == $s)] | length' "$outcomes"; }
+              tally() { jq --arg s "$1" '[.outcomes[] | select(.scenario != "Baseline" and .summary == $s)] | length' "$outcomes"; }
               s_missed=$(tally MissedMutant)
               s_timeout=$(tally Timeout)
               missed=$((missed + s_missed))
@@ -630,16 +640,25 @@ jobs:
         # clean run after a red one flips it. A fork PR's token is read-only:
         # no comment there; the annotations and step summary still land. A push
         # has no PR: the red report job is the alert (GitHub emails the pusher).
-        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        # !cancelled(): a Classify crash must still overwrite a previous "clean".
+        if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
           PR: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
           marker='<!-- mutants-on-prs -->'
+          mkdir -p "$RUNNER_TEMP/report"
           body="$RUNNER_TEMP/report/comment.md"
-          { echo "$marker"; cat "$RUNNER_TEMP/report/body.md"; } > "$body"
+          if [ -f "$RUNNER_TEMP/report/body.md" ]; then
+            { echo "$marker"; cat "$RUNNER_TEMP/report/body.md"; } > "$body"
+          else
+            printf "%s\n## mutants: incomplete (the report step failed)\n\nTested head \`%s\` | [run](%s)\n" \
+              "$marker" "${HEAD_SHA:0:12}" "$RUN_URL" > "$body"
+          fi
           ids=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
             --jq ".[] | select(.body | startswith(\"$marker\")) | .id")
           id=${ids%%$'\n'*}
