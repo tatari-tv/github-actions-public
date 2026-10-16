@@ -61,6 +61,7 @@ Add a reusable `mutants.yml` workflow to `github-actions-public` that runs `carg
 - private and public repos are both in scope (Scott, 2026-10-14)
 - archived and forked repos are out
 - the authoritative list is generated in Phase 6 from the GitHub API, not hand-kept
+- Phase 6 reconciliation (2026-10-15): `tatari-tv` is 19 Rust repos, not 21. Of the 21 counted above, `claude-pricing` is archived and `vault-for-brands-api` is Python; `clyde` was onboarded in Phases 1 and 4; `auth-client-rs` (Rust, no local clone) was missed. Processed: 51 `scottidler` + 18 `tatari-tv` = 69; 43 onboarded, 26 skipped (see Open Questions).
 
 ## Proposed Solution
 
@@ -291,8 +292,8 @@ Ship order: `github-actions-public` -> `scaffold` -> fleet callers. Each phase i
 - [x] A fresh `scaffold` repo contains `.github/workflows/mutants.yml` and a `mutants:` otto task, and its fixture survivor is reported.
   - Verified 2026-10-15 with installed scaffold v0.2.0: generated repo has `.github/workflows/{ci,mutants,release}.yml` (caller `@v2.2.0`), `.otto.yml` `mutants:` task, `.gitignore` with `/rc` and `mutants.out*`. Fixture: untested `double` -> `rc` 2, `missed.txt` lists `replace * with + in double`; with a test -> `rc` 0; a `w/`-prefixed diff is refused.
   - Observed 2026-10-14: `grep -c mutants scaffold/src/templates.rs` = 0.
-- [x] Every in-scope repo has a completed `mutants.yml` run.
-  - Verified 2026-10-15: all 43 fleet repos `completed/success` on their main commit (37 direct pushes, 6 gated merges), plus clyde run 38854360037 on the #113 merge. In scope narrowed from the Scope table: 26 repos skipped (21 already fail `otto ci` on main, 4 lack an otto CI setup, second-brain's baseline fails on workspace-level features); listed in the implementation notes.
+- [ ] Every in-scope repo has a completed `mutants.yml` run.
+  - Partial, 2026-10-15: 44 repos onboarded and `completed/success` on main (43 fleet: 37 direct pushes, 6 gated merges; plus clyde run 38854360037 on the #113 merge). Not yet onboarded: 26 skipped repos (21 already fail `otto ci` on main, 4 lack an otto CI setup, second-brain's baseline fails on workspace-level features) and `auth-client-rs`. Stays unchecked until the fleet-scope open question is ruled: onboard them, or record them as excluded in Scope.
 - [ ] A push to main with an untested change fails the run and emails the pusher.
   - Run half verified 2026-10-15: scottidler/mutants-probe run 38825348002 fails with the untested fn in the summary and annotations. Email half UNVERIFIED: the pusher's address (`scott.a.idler@gmail.com`) is not readable from this session; Scott to confirm.
 

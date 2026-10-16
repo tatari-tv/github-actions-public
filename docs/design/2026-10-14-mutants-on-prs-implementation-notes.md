@@ -529,6 +529,7 @@ Further runs:
 
 ### Open questions
 - 26 skipped repos (21 fail `otto ci` on main, mostly 1.99 clippy lints; exercism, rust-catalog, rust-cli lack `.otto.yml`; catalog-api lacks a `ci` task; second-brain's baseline fails on workspace-level `--features vec`): fix and onboard, or leave out.
+- Scope reconciliation: `tatari-tv` is 19 Rust repos, not the 21 in the Scope table (`claude-pricing` archived, `vault-for-brands-api` Python, `clyde` onboarded in Phases 1 and 4, `auth-client-rs` missed for lacking a local clone). Recorded in the design doc's Scope section; the fleet criterion stays unchecked until the scope ruling.
 - slack-cli `valet-client` is outside `--workspace` (accepted limit, Resolved Decisions).
 - Cosmetic: when a run plans zero shards the skipped job shows as `mutants / shard ${{ matrix.shard }}`; a static job name fixes it.
 - rustup toolchains 1.96.0 and 1.98.0 were installed during prep and are unused.
