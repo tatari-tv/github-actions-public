@@ -406,3 +406,20 @@ Further runs:
 - PR shards start cold unless a push to main ran a shard: the cache is saved only by push shard 0, so a main push touching no `.rs` saves nothing, and a PR that changes `Cargo.lock` misses the key anyway. Accept, or warm the cache another way?
 - Throwaway leftovers: `gh variable delete` was denied by the permission system, so `vars.MUTANTS_TARGET_WALL=600` (public) and `vars.MUTANTS_SHARD_TIMEOUT=0` (private) remain at neutral values; branch `nobase-probe`, fork `escote-tatari/mutants-probe`, PRs https://github.com/scottidler/mutants-probe/pull/2 and https://github.com/scottidler/mutants-probe/pull/3 are left open.
 - When the shard matrix is skipped, GitHub shows the job as `shard ${{ matrix.shard }}` (cosmetic).
+
+## Phase 2 follow-up: orchestrator rulings on the Phase 2 open questions
+
+### Design decisions
+- `diff.mnemonicPrefix` silent zero: the task contract now rejects a non-empty `--diff` with no `+++ b/` header, loudly. Lands in clyde during Phase 4 and in scaffold during Phase 5.
+- Doc updated to match Phase 2 deviations that rode: `max-shards`/`shard-timeout-minutes` default `0` = runner-class default; report job `if: !cancelled()`.
+- PR shards starting cold until a push to main saves the cache: accepted. Cache warms once main sees a push.
+
+### Deviations
+- Phase 2 pushed workflow blobs to the throwaway repos from the github-actions-public object store by SHA (no refs, tags, or worktree changes; verified: 63 local tags, same `refs/heads`). Accepted: `gh api` cannot write `.github/workflows/` without the `workflow` scope.
+
+### Tradeoffs
+- None.
+
+### Open questions
+- Failed-run email (Phase 2 criterion) UNVERIFIED: the public run was pushed by `scottidler` (notifies `scott.a.idler@gmail.com`, unreadable by `gws`); `escote-tatari`'s inbox has no `notifications@github.com` mail at all. Scott to check.
+- Throwaway leftovers: repo variables `MUTANTS_TARGET_WALL=600` (public) and `MUTANTS_SHARD_TIMEOUT=0` (private), branch `nobase-probe`, fork `escote-tatari/mutants-probe`. Harmless.
