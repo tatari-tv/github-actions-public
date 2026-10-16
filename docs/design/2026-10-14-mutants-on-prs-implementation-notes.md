@@ -443,3 +443,92 @@ Further runs:
 - Workflow vs doc: no behavioral disagreement found. Already-ruled differences: per-class `0` defaults, `!cancelled()`, explicit `a/ b/` prefixes, annotations from the report job rather than `--annotations auto`.
 - The README's `private-deps-token` example reuses `ACTIONS_CLONE_SUBMODULE_TOKEN` from the CI example. Confirm that is the secret name public repos should show.
 - Fork + `private-deps` reads `incomplete: private deps unavailable on fork` only on a fork PR. A same-repo run with the secret missing reads `private-deps is set but the private-deps-token secret is empty`. README documents the fork message only.
+
+## Phase 6: Fleet rollout (local half)
+### Design decisions
+- Repo list generated from the API: `user/repos?affiliation=owner` as home (the public `users/<u>/repos` endpoint hides private `sitr`), `orgs/tatari-tv/repos` as work. 51 scottidler + 18 tatari-tv = 69 repos processed; `auth-client-rs` excluded (no local clone under ~/repos/tatari-tv).
+- Driver is `/home/saidler/repos/.mutants-rollout/tools/run.sh` (symlink to the session scratchpad), one repo at a time: gates, baseline `otto ci`, `cargo mutants --list` count, apply, `otto ci`, proof, commit, `rm -rf target`. Not committed anywhere (a one-shot harness, not a tool worth keeping).
+- Task template copied from scaffold `generate_otto_yml`, `--workspace` always, feature flags read from each repo's `otto test` (`--all-features` almost everywhere).
+- Proof diff is the smallest `HEAD~k..HEAD` (k<=10) listing 1-60 mutants, since the tree always matches a range ending at HEAD (no exit 5). Result: 43 ready, every proof rc 0 or 2.
+- Gated = classic protection present (11 repos, all tatari-tv) or a push-blocking ruleset. `sitr` is private on a free plan: protection API returns 403, treated as ungated.
+### Deviations
+- Scott-directed: no `rust-version` copied into any mutants.yml caller; caller pinned `@v2.3.0` (design said v2.2.0); all Rust reusable callers moved to rust-version "1.99.1" in a `ci(rust)` commit; local toolchain is stable 1.99.0 (two pinned toolchains, 1.96.0 and 1.98.0, were installed by mistake before the instruction and are unused).
+- Proof diff is a `HEAD~k..HEAD` range, not the single HEAD commit, because a single commit often lists 0 mutants and proves nothing.
+- aka: otto test is `env -u XDG_* cargo test --all-features -- --test-threads=1`; the task keeps the env prefix and passes `-- -- --test-threads=1` to cargo-mutants.
+- Four repos (clapr, cli-workspace, dashify, layer-config) track a machine-specific `target` symlink to a missing SSD path. Removed locally with `git update-index --skip-worktree`, never committed.
+- lint-unused committed by hand: its tests write an untracked `lint-unused/logs/lint-unused.log`, which tripped the driver's dirty-tree check after a passing proof.
+- valet's platform-standard-ci caller pinned to 1.99.1 by hand (pin199.py only matches rust-ci and rust-cli-release).
+### Tradeoffs
+- Skip on baseline failure vs fixing the repo: skipped, since fixing lint debt in 21 repos is not this phase.
+### Open questions
+- 21 repos fail `otto ci` on the untouched clone under stable 1.99 (new clippy lints such as trailing-semicolon-in-macro, must_use, borrowed-expression; git-tools needs built binaries; bump needs npm/uv; loopr has a failing test; sitr's lint rewrites docs). They need their own fix PRs before a mutants caller is useful.
+- second-brain: cargo-mutants runs per package, so `--features vec` fails with "borrowed package does not contain feature" and baseline exits 4. Needs per-package features or a mutants.toml.
+- catalog-api has no `ci` task; rust-catalog, rust-cli, exercism have no .otto.yml.
+
+## Phase 3 close-out: release and cross-repo call
+
+### Design decisions
+- `v2.2.0` (annotated, on #8 merge `2042148`) cut by the orchestrator on Scott's order ("you tag it"); this repo runs no CI on main, so there was no run to wait on (`v2.1.0`'s commit has 0 check runs too).
+- The probe repo's caller was pinned to `@v2.2.0` and renamed `mutants.yml`; run 38838082993 completed `success`, log shows `Uses: tatari-tv/github-actions-public/.github/workflows/mutants.yml@refs/tags/v2.2.0`.
+
+### Deviations
+- None.
+
+### Tradeoffs
+- The close-out run was a push, not a PR: the sticky comment through the tag was proven later by the clyde canary.
+
+### Open questions
+- None.
+
+## Phase 4: Clyde canary
+
+### Design decisions
+- `mutants-otto-task` rebased onto clyde main; added the `+++ b/` guard (proven: a `w/` diff is refused, an `a/ b/` diff runs) and `/rc` to `.gitignore` (a local run otherwise leaves an untracked `rc`). Caller `@v2.2.0` with no `with:` (clyde's `ci.yml` passes none).
+- Canary #110 (base `mutants-otto-task`): reverted 1b30141's test and renamed the filter closure's binding on the prewarm line. Sticky comment listed `missed common/src/repo.rs:196:70: delete ! in Resolver::prewarm`; closed unmerged, branch deleted.
+- Not-required check: canary check contexts `mutants / plan`, `mutants / shard 0`, `mutants / report`; clyde classic `required_status_checks` null, rulesets `deletion`, `non_fast_forward`, `workflows` only.
+
+### Deviations
+- The task ran inline in the orchestrator, not a phase-implementer: the worker could not fetch or push from the worktree (Bash cwd resets; the git hook only allows bare network verbs). Scott's `!cd` moved the session into the worktree.
+- Stale `rc` fix (`rm -f rc` moved ahead of the guard) missed #109; shipped in clyde #113 as v0.26.3 with clyde's 1.99.1 / `@v2.3.0` move.
+
+### Tradeoffs
+- None.
+
+### Open questions
+- clyde `bump.yml` install is `cargo install --path clyde`, which re-resolves and hits yanked `zip 8.6.0` (via mcp-io v0.3.0). v0.26.3 installed with `--locked`; `bump.yml` needs `--locked` before the next release.
+
+## Phase 5: Scaffold
+
+### Design decisions
+- Caller always targets `tatari-tv/github-actions-public` (not `workflow_org`, which points at the private repo). `generate_otto_yml` takes `project_name` for the `TMPDIR` default. New `generate_gitignore` appends missing `/target`, `mutants.out*`, `/rc` (the skill runs `--force` on a clone that already has GitHub's Rust `.gitignore`, so `write_if_not_exists` would skip it).
+- Shipped as scaffold v0.2.0 (ungated, `bump release -m`); installed binary verified to emit `mutants.yml@v2.2.0`, the `mutants:` task, and the gitignore entries.
+
+### Deviations
+- Two fixes rode the release: stale `rc` cleared before the guard; `test_generate_project_pins_detected_version_without_override` joined `serial(cwd)` (it raced main.rs tests that delete their TempDir cwd under `rustc --version`; 0/10 failures after).
+- Skill "Produces" line committed to `scottidler/claude` main (`a065498`), local only.
+
+### Tradeoffs
+- Trimmed comments in the generic task vs clyde's measured history: the history stays in clyde.
+
+### Open questions
+- None.
+
+## Phase 6: Fleet rollout (pushed half) and Rust 1.99
+
+### Design decisions
+- Pushes ran from Scott's shell via `push.sh` / `push2.sh` (session cwd could not stay in the clones). 43 repos: 37 direct to main, 6 PRs (atlassian-cli #6, mcp-io-rs #17, okta-auth-rs #26, rust-axum-svc #6, slack-cli #75, valet #14), all merged by Scott.
+- Every repo: mutants run `completed/success` on main. CI green on all repos that have a CI workflow (9 have only `mutants.yml`).
+- Rust 1.99 (Scott): reusable defaults `1.99.1` in v2.3.0; callers pinned `rust-version: "1.99.1"` (all public/internal tags default to 1.96.0, so the pin is what moves them); hand-written workflows' `RUST_VERSION` moved too; `platform-standard-ci` callers pin `"1.99"` (ECR has `base/rust:1.99-builder-base`, not `1.99.1`).
+- okta-auth-rs CodeRabbit claim (otto rejects `default: false` for `--in-place`) refuted: `otto ci` green on that branch and the clyde canary's CI shard ran the same declaration.
+
+### Deviations
+- keyby-rs CI had been red since April: `~/.rustfmt.toml` (`max_width = 120`) applied locally, CI formats at the default 100, and the repo had no `rustfmt.toml`. Added the house `rustfmt.toml`; CI green (run 38855133283).
+
+### Tradeoffs
+- `rust-version` pins on every caller vs bumping reusable tags (`@v1` callers would cross a major): pins work on every tag.
+
+### Open questions
+- 26 skipped repos (21 fail `otto ci` on main, mostly 1.99 clippy lints; exercism, rust-catalog, rust-cli lack `.otto.yml`; catalog-api lacks a `ci` task; second-brain's baseline fails on workspace-level `--features vec`): fix and onboard, or leave out.
+- slack-cli `valet-client` is outside `--workspace` (accepted limit, Resolved Decisions).
+- Cosmetic: when a run plans zero shards the skipped job shows as `mutants / shard ${{ matrix.shard }}`; a static job name fixes it.
+- rustup toolchains 1.96.0 and 1.98.0 were installed during prep and are unused.
