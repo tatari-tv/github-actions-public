@@ -1,0 +1,659 @@
+name: mutants
+
+# Reusable diff-scoped mutation testing for Rust repos. Runs `cargo mutants` on the
+# change (a PR's diff, or a push's before..after range), in parallel with rust-ci,
+# and turns every surviving mutant into an alert: annotations, a bounded step
+# summary, one sticky PR comment, and a red report job. It never blocks a merge:
+# callers never add it to required checks. Design:
+# docs/design/2026-10-14-mutants-on-prs.md (in this repo).
+#
+# Three jobs:
+#   plan    derive the diff, list its mutants (`cargo mutants --list --json
+#           --in-diff`), size N shards from the count, upload pr.diff + plan.json
+#   shard   matrix k = 0..N-1: same env prep as rust-ci.yml, then
+#           `otto mutants --diff pr.diff --shard k/N --in-place`; the repo's otto
+#           task owns the cargo-mutants flags (house rule, as in rust-ci.yml), so
+#           `otto mutants --diff x.diff` locally is the same run CI does
+#   report  reconcile shard outcomes against plan.json BY MUTANT NAME, classify,
+#           summarize, upsert the sticky comment, and set the conclusion
+#
+# "clean" is only ever reported when every planned mutant has an outcome from
+# exactly one shard. A killed shard, a missing artifact, a failed plan, or a
+# fork PR that cannot reach private deps reads "incomplete", never clean.
+#
+# The CALLER owns the trigger and grants the permission ceiling:
+#   on: { pull_request: {}, push: { branches: [main] } }
+#   permissions: { contents: read, pull-requests: write }
+
+on:
+  workflow_call:
+    inputs:
+      rust-version:
+        description: "Rust toolchain version."
+        required: false
+        type: string
+        default: "1.96.0"
+      target-wall:
+        description: >-
+          Seconds one shard should spend testing mutants. N = ceil(count * cost /
+          target-wall), clamped to [1, min(max-shards, count)].
+        required: false
+        type: number
+        default: 600
+      max-shards:
+        description: >-
+          Ceiling on shard runners per run. 0 = the runner-class default
+          (public 10, private 6; private repos bill org minutes per shard).
+        required: false
+        type: number
+        default: 0
+      shard-timeout-minutes:
+        description: >-
+          timeout-minutes for each shard job. 0 = the runner-class default
+          (public 45, private 60).
+        required: false
+        type: number
+        default: 0
+      private-deps:
+        description: >-
+          Enable private git dependency fetching (CARGO_NET_GIT_FETCH_WITH_CLI +
+          insteadOf token). Requires the private-deps-token secret. A fork PR
+          gets no secrets, so with this set its run reports "incomplete".
+        required: false
+        type: boolean
+        default: false
+      whitespace-version:
+        description: >-
+          tatari-tv/whitespace release tag to install (mirrors rust-ci.yml, so a
+          caller passes the same `with:` to both).
+        required: false
+        type: string
+        default: "v0.1.6"
+      eza-version:
+        description: >-
+          eza-community/eza release tag to install, for repos whose code or
+          tests shell out to eza (e.g. rkvr's archive metadata). Empty skips it.
+        required: false
+        type: string
+        default: ""
+    secrets:
+      private-deps-token:
+        description: "Token for private git deps (used when private-deps=true)."
+        required: false
+
+permissions:
+  contents: read
+
+# A PR run re-tests the whole PR diff, so a newer push cancels the stale run and
+# loses nothing. A push run tests only its own before..after range, so each push
+# gets its own group and is never cancelled: cancelling push A because push B
+# landed would leave A's change untested.
+concurrency:
+  group: ${{ github.event_name == 'pull_request' && format('mutants-pr-{0}', github.event.pull_request.number) || format('mutants-{0}-{1}', github.event_name, github.sha) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # The ONE pin. A newer cargo-mutants generates different mutants and silently
+  # changes what "zero survivors" means, so it moves only by a release of this
+  # repo. The release ships no .sha256; this one was computed from the tarball.
+  # The repo's otto task reads MUTANTS_VERSION and skips its own install when the
+  # binary on PATH matches.
+  MUTANTS_VERSION: "27.1.0"
+  MUTANTS_SHA256: "dfe6dc37d0342c891d2829b5a695aa57c2d0edecef7e7d0399a30cc6e206411e"
+
+jobs:
+  plan:
+    name: plan
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.plan.outputs.sha }}
+      count: ${{ steps.plan.outputs.count }}
+      shards: ${{ steps.plan.outputs.shards }}
+      matrix: ${{ steps.plan.outputs.matrix }}
+      timeout: ${{ steps.plan.outputs.timeout }}
+      incomplete: ${{ steps.plan.outputs.incomplete }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          # pull_request: HEAD is GitHub's merge commit and HEAD^1 the base tip,
+          # so `git diff HEAD^1 HEAD` is exactly the PR's change against the
+          # tree being tested. (origin/main is not fetched on a PR checkout.)
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ inputs.rust-version }}
+
+      - name: Set up cargo-mutants
+        run: |
+          set -euo pipefail
+          [ "$(uname -m)" = x86_64 ] || { echo "::error::cargo-mutants ships only an x86_64-unknown-linux-gnu prebuilt; runner is $(uname -m)"; exit 1; }
+          url="https://github.com/sourcefrog/cargo-mutants/releases/download/v${MUTANTS_VERSION}/cargo-mutants-x86_64-unknown-linux-gnu.tar.gz"
+          echo "downloading $url"
+          curl -fsSL "$url" -o /tmp/cargo-mutants.tar.gz
+          echo "${MUTANTS_SHA256}  /tmp/cargo-mutants.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/cargo-mutants.tar.gz -C "$HOME/.cargo/bin" cargo-mutants
+          cargo mutants --version
+
+      - name: Plan
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+          TOKEN: ${{ github.token }}
+          REPO_PRIVATE: ${{ github.event.repository.private }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository }}
+          PRIVATE_DEPS: ${{ inputs.private-deps }}
+          HAVE_DEPS_TOKEN: ${{ secrets.private-deps-token != '' }}
+          TARGET_WALL: ${{ inputs.target-wall }}
+          MAX_SHARDS: ${{ inputs.max-shards }}
+          SHARD_TIMEOUT: ${{ inputs.shard-timeout-minutes }}
+        run: |
+          set -euo pipefail
+          incomplete() {
+            echo "incomplete=$1" >> "$GITHUB_OUTPUT"
+            echo "::error title=mutants incomplete::$1"
+            exit 1
+          }
+          is_uint() { [[ "$1" =~ ^[0-9]+$ ]]; }
+
+          # Runner-class constants, measured in the design's Phase 0 (in-place,
+          # one job): per-mutant seconds, shard ceiling, shard timeout. Private
+          # repos get 2 vCPU / 8 GB runners; public get 4 vCPU / 16 GB.
+          if [ "$REPO_PRIVATE" = true ]; then
+            class=private cost=11 default_max=6 default_timeout=60
+          else
+            class=public cost=7 default_max=10 default_timeout=45
+          fi
+          for v in TARGET_WALL MAX_SHARDS SHARD_TIMEOUT; do
+            is_uint "${!v}" || incomplete "input ${v} is not a non-negative integer: '${!v}'"
+          done
+          [ "$TARGET_WALL" -gt 0 ] || incomplete "target-wall must be > 0"
+          max_shards=$MAX_SHARDS; [ "$max_shards" -gt 0 ] || max_shards=$default_max
+          timeout=$SHARD_TIMEOUT; [ "$timeout" -gt 0 ] || timeout=$default_timeout
+          # Emitted before anything can fail: the shard job's timeout-minutes reads it.
+          echo "timeout=$timeout" >> "$GITHUB_OUTPUT"
+          echo "runner class: $class (cost ${cost}s/mutant, max-shards $max_shards, shard timeout ${timeout}m, target-wall ${TARGET_WALL}s)"
+
+          # A fork PR gets no secrets. Planning would succeed, but every shard
+          # would fail to fetch private deps; say so up front instead.
+          if [ "$PRIVATE_DEPS" = true ] && [ "$HAVE_DEPS_TOKEN" != true ]; then
+            if [ "$IS_FORK" = true ]; then
+              incomplete "private deps unavailable on fork"
+            fi
+            incomplete "private-deps is set but the private-deps-token secret is empty"
+          fi
+
+          # Explicit a/ b/ prefixes: cargo-mutants maps diff paths by stripping
+          # them, and a diff written with diff.mnemonicPrefix (i/ w/ c/) lists
+          # ZERO mutants with exit 0. Measured on desk, where dotfiles set it.
+          diff="$RUNNER_TEMP/pr.diff"
+          gdiff() { git diff --no-ext-diff --src-prefix=a/ --dst-prefix=b/ "$@"; }
+          case "$EVENT" in
+            pull_request)
+              gdiff HEAD^1 HEAD > "$diff"
+              ;;
+            push)
+              # Test the whole pushed range, before..sha. Never fall back to
+              # HEAD^: that silently tests only the last commit of a multi-commit
+              # push. A zero before (new branch) or an unfetchable one (force push
+              # dropped it) has no base, and that is incomplete, not clean.
+              if [ -z "$BEFORE" ] || [[ "$BEFORE" =~ ^0+$ ]]; then
+                incomplete "no base for push (before is '${BEFORE:-empty}')"
+              fi
+              # persist-credentials is false, so a private repo's fetch needs the
+              # job token; it rides this one command only and never lands in
+              # .git/config, where the shard's test run (PR code) could read it.
+              auth=$(printf 'x-access-token:%s' "$TOKEN" | base64 -w0)
+              echo "::add-mask::$auth"
+              if ! git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic $auth" \
+                  fetch --no-tags --depth=1 origin "$BEFORE"; then
+                incomplete "no base for push (fetch of before $BEFORE failed; force push?)"
+              fi
+              gdiff "$BEFORE" "$SHA" > "$diff"
+              ;;
+            *)
+              incomplete "unsupported event '$EVENT' (want pull_request or push)"
+              ;;
+          esac
+          echo "diff: $(wc -l < "$diff") lines; files:"
+          grep '^+++ ' "$diff" || echo "(none)"
+
+          # --list runs `cargo metadata --no-deps`, so no private deps are fetched.
+          # Zero mutants prints NOTHING (not `[]`) and exits 0; anything else that
+          # is not a JSON array is a loud failure, never an empty plan.
+          list="$RUNNER_TEMP/list.json"
+          list_rc=0
+          cargo mutants --list --json --in-diff "$diff" --workspace > "$list" || list_rc=$?
+          [ "$list_rc" -eq 0 ] || incomplete "cargo mutants --list exited $list_rc (5/6 = diff derivation bug)"
+          if [ ! -s "$list" ]; then
+            echo '[]' > "$list"
+          fi
+          jq -e 'type == "array"' "$list" > /dev/null || incomplete "cargo mutants --list --json output is not a JSON array"
+          count=$(jq 'length' "$list")
+
+          if [ "$count" -eq 0 ]; then
+            shards=0
+          else
+            shards=$(( (count * cost + TARGET_WALL - 1) / TARGET_WALL ))
+            cap=$(( max_shards < count ? max_shards : count ))
+            [ "$shards" -le "$cap" ] || shards=$cap
+            [ "$shards" -ge 1 ] || shards=1
+          fi
+          echo "mutants: $count -> $shards shard(s) (ceil($count * $cost / $TARGET_WALL), cap min($max_shards, $count))"
+
+          mkdir -p "$RUNNER_TEMP/plan"
+          cp "$diff" "$RUNNER_TEMP/plan/pr.diff"
+          jq -n --arg sha "$SHA" --argjson n "$shards" --arg class "$class" --argjson cost "$cost" \
+            --slurpfile list "$list" \
+            '{sha: $sha, N: $n, J: 1, class: $class, cost: $cost, mutants: [$list[0][].name]}' \
+            > "$RUNNER_TEMP/plan/plan.json"
+          {
+            echo "sha=$SHA"
+            echo "count=$count"
+            echo "shards=$shards"
+            echo "matrix=$(jq -cn --argjson n "$shards" '[range(0; $n)]')"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Upload plan
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-plan
+          path: |
+            ${{ runner.temp }}/plan/pr.diff
+            ${{ runner.temp }}/plan/plan.json
+          if-no-files-found: error
+          overwrite: true
+
+  shard:
+    name: shard ${{ matrix.shard }}
+    needs: plan
+    if: ${{ needs.plan.result == 'success' && needs.plan.outputs.shards != '0' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ fromJSON(needs.plan.outputs.timeout) }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ needs.plan.outputs.sha }}
+          persist-credentials: false
+
+      - name: Download plan
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mutants-plan
+          path: ${{ runner.temp }}/plan
+
+      - name: Configure private git deps
+        if: ${{ inputs.private-deps }}
+        env:
+          DEPS_TOKEN: ${{ secrets.private-deps-token }}
+        run: git config --global url."https://x-access-token:${DEPS_TOKEN}@github.com/".insteadOf "https://github.com/"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
+        with:
+          toolchain: ${{ inputs.rust-version }}
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          # One key for every shard, saved by shard 0 of a push run only. A cache
+          # saved by a PR run is scoped to that PR's merge ref and nobody else
+          # reads it; one saved on main is restored by every PR.
+          shared-key: mutants
+          save-if: ${{ github.event_name == 'push' && matrix.shard == 0 }}
+
+      - name: Set up otto
+        # Same pin and reason as rust-ci.yml: setup-otto's v1 tag is stale.
+        uses: otto-rs/setup-otto@0676703d0c225f6c782235e181e4498a7726e4b5 # main (arch fix; v1 is stale)
+
+      - name: Set up whitespace
+        env:
+          WS_VERSION: ${{ inputs.whitespace-version }}
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) ws_suffix=linux-amd64 ;;
+            aarch64|arm64) ws_suffix=linux-arm64 ;;
+            *) echo "::error::unsupported arch $(uname -m) for whitespace install"; exit 1 ;;
+          esac
+          url="https://github.com/tatari-tv/whitespace/releases/download/${WS_VERSION}/whitespace-${WS_VERSION}-${ws_suffix}.tar.gz"
+          echo "downloading $url"
+          curl -fsSL "$url" -o /tmp/whitespace.tar.gz
+          sudo tar -xzf /tmp/whitespace.tar.gz -C /usr/local/bin whitespace
+          whitespace --version
+
+      - name: Set up eza
+        if: ${{ inputs.eza-version != '' }}
+        env:
+          EZA_VERSION: ${{ inputs.eza-version }}
+        run: |
+          set -euo pipefail
+          case "$(uname -m)" in
+            x86_64) eza_target=x86_64-unknown-linux-gnu ;;
+            aarch64|arm64) eza_target=aarch64-unknown-linux-gnu ;;
+            *) echo "::error::unsupported arch $(uname -m) for eza install"; exit 1 ;;
+          esac
+          url="https://github.com/eza-community/eza/releases/download/${EZA_VERSION}/eza_${eza_target}.tar.gz"
+          echo "downloading $url"
+          curl -fsSL "$url" -o /tmp/eza.tar.gz
+          sudo tar -xzf /tmp/eza.tar.gz -C /usr/local/bin ./eza
+          eza --version
+
+      - name: Set up cargo-mutants
+        # Installed before otto runs, so the task's own version check passes and
+        # it never compiles cargo-mutants from source.
+        run: |
+          set -euo pipefail
+          [ "$(uname -m)" = x86_64 ] || { echo "::error::cargo-mutants ships only an x86_64-unknown-linux-gnu prebuilt; runner is $(uname -m)"; exit 1; }
+          url="https://github.com/sourcefrog/cargo-mutants/releases/download/v${MUTANTS_VERSION}/cargo-mutants-x86_64-unknown-linux-gnu.tar.gz"
+          echo "downloading $url"
+          curl -fsSL "$url" -o /tmp/cargo-mutants.tar.gz
+          echo "${MUTANTS_SHA256}  /tmp/cargo-mutants.tar.gz" | sha256sum -c -
+          tar -xzf /tmp/cargo-mutants.tar.gz -C "$HOME/.cargo/bin" cargo-mutants
+          cargo mutants --version
+
+      - name: Disk before
+        run: df -h
+
+      - name: otto mutants
+        env:
+          CARGO_NET_GIT_FETCH_WITH_CLI: ${{ inputs.private-deps }}
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ needs.plan.outputs.shards }}
+        # `--in-place` and no `--jobs`: Phase 0 picked in-place for both runner
+        # classes (fastest, smallest disk peak, uses the rust-cache target/), and
+        # cargo-mutants 27.1.0 rejects `--in-place` with `--jobs`. otto exits 1
+        # on any task failure, so its exit code says nothing; the task writes
+        # cargo-mutants' raw exit code to `rc`, and the report reads that.
+        run: |
+          rm -f rc
+          otto_rc=0
+          otto mutants --diff "$RUNNER_TEMP/plan/pr.diff" --shard "${SHARD}/${SHARDS}" --in-place || otto_rc=$?
+          echo "otto exit code $otto_rc (not used for classification; rc is: $(cat rc 2>/dev/null || echo missing))"
+
+      - name: Disk after
+        if: ${{ always() }}
+        run: df -h
+
+      - name: Collect shard output
+        if: ${{ always() }}
+        env:
+          SHARD: ${{ matrix.shard }}
+        # Staged under a mutants-shard-k/ directory INSIDE the artifact, so the
+        # report's merged download lands every shard at shards/mutants-shard-k/
+        # whether one artifact matches or many (download-artifact extracts a
+        # single pattern match straight into `path`, with no per-name subdir).
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/shard-out/mutants-shard-$SHARD"
+          mkdir -p "$out"
+          [ -f rc ] && cp rc "$out/rc"
+          [ -d mutants.out ] && cp -r mutants.out "$out/mutants.out"
+          ls -la "$out"
+
+      - name: Upload shard output
+        if: ${{ always() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mutants-shard-${{ matrix.shard }}
+          path: ${{ runner.temp }}/shard-out/
+          if-no-files-found: warn
+          overwrite: true
+
+      - name: Require rc
+        # A shard that never wrote rc did not finish (otto or the task broke
+        # before cargo-mutants returned); fail it so the run shows where.
+        run: |
+          [ -f rc ] || { echo "::error title=mutants shard ${{ matrix.shard }}::no rc file: the otto mutants task did not run cargo-mutants to completion"; exit 1; }
+
+  report:
+    name: report
+    needs: [plan, shard]
+    # Runs when plan or a shard failed, so a broken run reads "incomplete"
+    # rather than leaving no verdict. A cancelled run (a newer push to the same
+    # PR) does not report: its successor will.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+    steps:
+      # A missing artifact is a finding for Classify, not a step failure here.
+      - name: Download plan
+        if: ${{ needs.plan.result == 'success' }}
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mutants-plan
+          path: ${{ runner.temp }}/plan
+
+      - name: Download shard outputs
+        if: ${{ needs.shard.result != 'skipped' }}
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: mutants-shard-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: true
+
+      - name: Classify
+        id: classify
+        env:
+          PLAN_RESULT: ${{ needs.plan.result }}
+          PLAN_INCOMPLETE: ${{ needs.plan.outputs.incomplete }}
+          EVENT: ${{ github.event_name }}
+          TESTED_SHA: ${{ github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          max_listed=50
+          plan_dir="$RUNNER_TEMP/plan"
+          shards_dir="$RUNNER_TEMP/shards"
+          work="$RUNNER_TEMP/report"
+          mkdir -p "$work"
+          : > "$work/expected"
+          : > "$work/names"
+          : > "$work/survivors.jsonl"
+          incomplete=()
+          baseline=()
+          count=0 shards=0 caught=0 unviable=0 missed=0 timeouts=0
+
+          if [ "$PLAN_RESULT" != success ]; then
+            incomplete+=("${PLAN_INCOMPLETE:-plan failed}")
+          elif [ ! -f "$plan_dir/plan.json" ]; then
+            incomplete+=("plan artifact missing")
+          else
+            count=$(jq '.mutants | length' "$plan_dir/plan.json")
+            shards=$(jq '.N' "$plan_dir/plan.json")
+            jq -r '.mutants[]' "$plan_dir/plan.json" | sort > "$work/expected"
+            for ((k = 0; k < shards; k++)); do
+              d="$shards_dir/mutants-shard-$k"
+              # Read DIR/mutants.out/*, never DIR/*: the latter reads empty and
+              # would report clean (otto-rs/otto bin/mutants-gate scar tissue).
+              outcomes="$d/mutants.out/outcomes.json"
+              if [ ! -d "$d" ]; then
+                incomplete+=("shard $k uploaded no artifact")
+                continue
+              fi
+              rc=missing
+              if [ -f "$d/rc" ]; then
+                rc=$(tr -d '[:space:]' < "$d/rc")
+              else
+                incomplete+=("shard $k wrote no rc (killed or broken mid-run)")
+              fi
+              if [ ! -f "$outcomes" ]; then
+                incomplete+=("shard $k has no mutants.out/outcomes.json")
+                continue
+              fi
+              jq -r '.outcomes[] | select(.scenario != "Baseline") | .scenario.Mutant.name' "$outcomes" >> "$work/names"
+              jq -c --argjson k "$k" '.outcomes[]
+                | select(.summary == "MissedMutant" or .summary == "Timeout")
+                | {shard: $k, outcome: (if .summary == "Timeout" then "timeout" else "missed" end),
+                   name: .scenario.Mutant.name, file: .scenario.Mutant.file,
+                   line: .scenario.Mutant.span.start.line, diff: .diff_path}' "$outcomes" >> "$work/survivors.jsonl"
+              tally() { jq --arg s "$1" '[.outcomes[] | select(.summary == $s)] | length' "$outcomes"; }
+              s_missed=$(tally MissedMutant)
+              s_timeout=$(tally Timeout)
+              missed=$((missed + s_missed))
+              timeouts=$((timeouts + s_timeout))
+              caught=$((caught + $(tally CaughtMutant)))
+              unviable=$((unviable + $(tally Unviable)))
+              # cargo-mutants' rc reports timeout ahead of missed when both
+              # occur, so the outcomes are the source of truth; rc is checked
+              # for agreement and for the codes outcomes cannot express.
+              case "$rc" in
+                missing) : ;;
+                0) [ $((s_missed + s_timeout)) -eq 0 ] || incomplete+=("shard $k: rc 0 but outcomes list survivors") ;;
+                2|3) [ $((s_missed + s_timeout)) -gt 0 ] || incomplete+=("shard $k: rc $rc but outcomes list no survivor") ;;
+                4) baseline+=("$k") ;;
+                5|6) incomplete+=("diff derivation bug (shard $k: cargo-mutants rc $rc)") ;;
+                *) incomplete+=("shard $k: unexpected cargo-mutants rc $rc") ;;
+              esac
+            done
+            # Identity, not counts: the union of shard outcomes must equal the
+            # plan's mutant list exactly (multiset compare: no duplicates, none
+            # missing). A failed baseline tests nothing, so its gap is reported as
+            # the baseline failure, not again as missing mutants.
+            sort "$work/names" > "$work/got"
+            n_missing=$(comm -23 "$work/expected" "$work/got" | wc -l)
+            n_extra=$(comm -13 "$work/expected" "$work/got" | wc -l)
+            if [ "$n_missing" -gt 0 ] && [ "${#baseline[@]}" -eq 0 ]; then
+              incomplete+=("$n_missing of $count planned mutants have no outcome")
+            fi
+            if [ "$n_extra" -gt 0 ]; then
+              incomplete+=("$n_extra outcomes are duplicated or not in the plan")
+            fi
+          fi
+
+          n_survivors=$(wc -l < "$work/survivors.jsonl")
+          if [ "${#incomplete[@]}" -gt 0 ]; then
+            state=incomplete
+            title="incomplete: $(printf '%s; ' "${incomplete[@]}" | sed 's/; $//')"
+          elif [ "${#baseline[@]}" -gt 0 ]; then
+            state=red
+            title="mutation baseline failed"
+          elif [ "$n_survivors" -gt 0 ]; then
+            state=red
+            title="$n_survivors surviving mutant(s) in this change"
+          else
+            state=clean
+            title="clean"
+          fi
+
+          render() { # render <with-diffs: 1|0>
+            echo "## mutants: $title"
+            echo
+            echo "Tested \`${TESTED_SHA:0:12}\` ($EVENT, head \`${HEAD_SHA:0:12}\`) | [run]($RUN_URL) | cargo-mutants $MUTANTS_VERSION"
+            echo
+            echo "| mutants | shards | missed | timeout | caught | unviable |"
+            echo "|---|---|---|---|---|---|"
+            echo "| $count | $shards | $missed | $timeouts | $caught | $unviable |"
+            if [ "${#incomplete[@]}" -gt 0 ]; then
+              echo
+              echo "### Incomplete"
+              echo
+              echo "Not every planned mutant was tested, so this is not a clean result."
+              echo
+              printf -- '- %s\n' "${incomplete[@]}"
+            fi
+            for k in "${baseline[@]}"; do
+              echo
+              echo "### Mutation baseline failed (shard $k)"
+              echo
+              echo "The unmutated tree failed its build or tests, so no mutants were tested. Last 40 lines of \`mutants.out/log/baseline.log\`:"
+              echo
+              echo '```text'
+              tail -n 40 "$shards_dir/mutants-shard-$k/mutants.out/log/baseline.log" 2>/dev/null || echo "(baseline.log missing)"
+              echo '```'
+            done
+            if [ "$n_survivors" -gt 0 ]; then
+              echo
+              echo "### Survivors"
+              echo
+              echo "A test suite that passes with this change applied does not check that code."
+              echo
+              head -n "$max_listed" "$work/survivors.jsonl" | while IFS= read -r s; do
+                echo "- **$(jq -r .outcome <<< "$s")** \`$(jq -r .name <<< "$s")\`"
+                diff_file="$shards_dir/mutants-shard-$(jq -r .shard <<< "$s")/mutants.out/$(jq -r '.diff // ""' <<< "$s")"
+                if [ "$1" = 1 ] && [ -f "$diff_file" ]; then
+                  echo
+                  echo "  <details><summary>diff</summary>"
+                  echo
+                  echo '  ```diff'
+                  head -n 30 "$diff_file" | sed 's/^/  /'
+                  echo '  ```'
+                  echo
+                  echo "  </details>"
+                fi
+              done
+              if [ "$n_survivors" -gt "$max_listed" ]; then
+                echo
+                echo "$((n_survivors - max_listed)) more in artifact \`mutants-shard-*\`."
+              fi
+            fi
+            if [ "$state" = clean ] && [ "$count" -eq 0 ]; then
+              echo
+              echo "No mutants in this change."
+            fi
+          }
+
+          # GitHub caps a comment at 65536 characters and the step summary at
+          # 1 MiB; if the diffs push the body past 60000, drop them (the names
+          # stay, the full set is in the shard artifacts).
+          render 1 > "$work/body.md"
+          if [ "$(wc -c < "$work/body.md")" -gt 60000 ]; then
+            render 0 > "$work/body.md"
+          fi
+          cat "$work/body.md" >> "$GITHUB_STEP_SUMMARY"
+
+          head -n "$max_listed" "$work/survivors.jsonl" | while IFS= read -r s; do
+            msg=$(jq -r .name <<< "$s" | sed 's/%/%25/g')
+            echo "::error file=$(jq -r .file <<< "$s"),line=$(jq -r .line <<< "$s"),title=mutants: $(jq -r .outcome <<< "$s")::$msg"
+          done
+          for r in "${incomplete[@]}"; do
+            echo "::error title=mutants incomplete::$r"
+          done
+          echo "state=$state" >> "$GITHUB_OUTPUT"
+          echo "mutants verdict: $title"
+
+      - name: Sticky comment
+        # One comment per PR, found by its marker and rewritten in place, so a
+        # clean run after a red one flips it. A fork PR's token is read-only:
+        # no comment there; the annotations and step summary still land. A push
+        # has no PR: the red report job is the alert (GitHub emails the pusher).
+        if: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          marker='<!-- mutants-on-prs -->'
+          body="$RUNNER_TEMP/report/comment.md"
+          { echo "$marker"; cat "$RUNNER_TEMP/report/body.md"; } > "$body"
+          ids=$(gh api --paginate "repos/$REPO/issues/$PR/comments" \
+            --jq ".[] | select(.body | startswith(\"$marker\")) | .id")
+          id=${ids%%$'\n'*}
+          if [ -n "$id" ]; then
+            gh api -X PATCH "repos/$REPO/issues/comments/$id" -F "body=@$body" --jq '"updated comment \(.id): \(.html_url)"' \
+              || echo "::warning title=mutants::could not update the sticky comment $id"
+          else
+            gh api -X POST "repos/$REPO/issues/$PR/comments" -F "body=@$body" --jq '"created comment \(.id): \(.html_url)"' \
+              || echo "::warning title=mutants::could not create the sticky comment"
+          fi
+
+      - name: Conclusion
+        env:
+          STATE: ${{ steps.classify.outputs.state }}
+        run: |
+          echo "mutants: $STATE"
+          [ "$STATE" = clean ]
