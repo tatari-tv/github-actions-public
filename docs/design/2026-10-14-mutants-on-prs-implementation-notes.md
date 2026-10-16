@@ -423,3 +423,23 @@ Further runs:
 ### Open questions
 - Failed-run email (Phase 2 criterion) UNVERIFIED: the public run was pushed by `scottidler` (notifies `scott.a.idler@gmail.com`, unreadable by `gws`); `escote-tatari`'s inbox has no `notifications@github.com` mail at all. Scott to check.
 - Throwaway leftovers: repo variables `MUTANTS_TARGET_WALL=600` (public) and `MUTANTS_SHARD_TIMEOUT=0` (private), branch `nobase-probe`, fork `escote-tatari/mutants-probe`. Harmless.
+
+## Phase 3: README
+
+### Design decisions
+- `mutants.yml` section sits after Release under "Consume it", with Inputs, the otto task contract, and "What you get back" as subsections | `README.md` | same shape as the CI and Release sections, extended because this workflow has a task contract the others lack.
+- Caller pins an `@vX.Y.Z` placeholder, and Versioning now names `mutants.yml` as the exception to the major-tag rule | `README.md` | the design requires an immutable pin because a different cargo-mutants version changes what "zero" means.
+- Inputs, defaults, and the secret are copied from `mutants.yml`'s `workflow_call` block, not from the doc.
+- Added a findings table (missed, timeout, baseline, rc 5/6, incomplete, green) mirroring the workflow's Classify step.
+
+### Deviations
+- None from the doc. The tag and the Phase 3 success criterion (throwaway repo pinned to the new tag completes a run) are Scott's operator step: not done, UNVERIFIED here.
+- `whitespace -r README.md` errors ("Not a directory"); ran `whitespace -r .` instead (clean; only README.md modified).
+
+### Tradeoffs
+- Documented the task contract in full vs linking the design doc: callers of a public repo cannot rely on a doc path in this repo staying in their view.
+
+### Open questions
+- Workflow vs doc: no behavioral disagreement found. Already-ruled differences: per-class `0` defaults, `!cancelled()`, explicit `a/ b/` prefixes, annotations from the report job rather than `--annotations auto`.
+- The README's `private-deps-token` example reuses `ACTIONS_CLONE_SUBMODULE_TOKEN` from the CI example. Confirm that is the secret name public repos should show.
+- Fork + `private-deps` reads `incomplete: private deps unavailable on fork` only on a fork PR. A same-repo run with the secret missing reads `private-deps is set but the private-deps-token secret is empty`. README documents the fork message only.
