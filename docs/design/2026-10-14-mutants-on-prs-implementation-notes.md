@@ -532,3 +532,25 @@ Further runs:
 - slack-cli `valet-client` is outside `--workspace` (accepted limit, Resolved Decisions).
 - Cosmetic: when a run plans zero shards the skipped job shows as `mutants / shard ${{ matrix.shard }}`; a static job name fixes it.
 - rustup toolchains 1.96.0 and 1.98.0 were installed during prep and are unused.
+
+## Implementation audit (review-panel round 1) and fixes
+
+Synthesis: ~/.cache/review-panel/runs/n1KXOexf/synthesis.md. The architect seat failed (Gemini made 8 read-only tool calls and wrote no review); the staff seat reviewed, and the panel agent re-tested every claim.
+
+### Design decisions
+- Must-fix 1, diff guard false green: `[ -s "${diff}" ]` is false for a pipe, so `--diff <(git diff)` with `i/ w/` prefixes skipped the guard (reproduced on deppy: rc 0, clean). The task now copies the diff to `mktemp` first and refuses any `+++` header that is not `b/` or `/dev/null` (also closes mixed-prefix diffs silently dropping files). Verified on deppy: pipe with `i/ w/` refused with the offending header named and no `rc`; pipe with `a/ b/` gives rc 2 and the survivor; mixed-prefix file refused. Applied to clyde, scaffold, and all 43 fleet tasks; `otto mutants --help` loads in all 44.
+- Must-fix 2, scaffold features: the generated task now passes `--all-features` like `otto test`; a test compares the two lines (fails with the flag removed).
+- Must-fix 3, baseline timeout: Classify excluded nothing, so a baseline Timeout hit `.scenario.Mutant.name` and jq exited 5 (reproduced on a synthetic outcomes.json). Baseline outcomes are now excluded from survivors and tallies and reported as a baseline failure; the sticky comment runs on any non-cancelled run with a fallback body, so a stale "clean" cannot survive a report crash.
+- Cheap win, version probe: `have=$(cargo mutants --version ... | awk ...)` died under `set -euo pipefail` when cargo-mutants was absent (exit 127); `|| true` lets the install branch run.
+- Cheap win, scaffold caller: pins `mutants.yml@v2.3.1` with the scaffolded `rust-version`.
+- Also: the shard job has a static name (a skipped matrix job rendered `shard ${{ matrix.shard }}`).
+
+### Deviations
+- The README's push-email sentence stays: the run half is verified, the email half is an open question below.
+
+### Tradeoffs
+- Copying the diff to a temp file vs requiring a regular file: the copy keeps `<(git diff)` working, which is the common local use.
+
+### Open questions
+- Fleet scope: 26 repos skipped (see Phase 6) and `auth-client-rs` excluded for having no local clone, which Scope does not list. Scott to rule: onboard or exclude.
+- Email half of the push criterion: Scott to check scott.a.idler@gmail.com for run 38825348002.

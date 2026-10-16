@@ -372,6 +372,9 @@ Ship order: `github-actions-public` -> `scaffold` -> fleet callers. Each phase i
 
 None. The scottidler trigger question is resolved (push:main, 2026-10-15, under Resolved Decisions).
 
+- [ ] **Fleet scope.** 26 Rust repos were skipped (21 fail `otto ci` on main, 4 lack an otto CI setup, second-brain's baseline fails on workspace-level features) and `auth-client-rs` has no local clone. Onboard them (fix CI first) or record them as excluded.
+- [ ] **Push-failure email.** Confirm GitHub's "Run failed" email for scottidler/mutants-probe run 38825348002 reached scott.a.idler@gmail.com.
+
 ## References
 
 - Pitch: https://marquee.internal.tatari.dev/p/~scott-idler/mutation-testing-on-every-pr/
