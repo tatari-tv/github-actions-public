@@ -207,7 +207,7 @@ jobs:
           (cd "$dir" && grep ' trivy_.*_Linux-64bit\.tar\.gz$' trivy_*_checksums.txt | sha256sum -c -)
           tar -xzf "$dir"/trivy_*_Linux-64bit.tar.gz -C "$dir" trivy
           echo "$dir" >> "$GITHUB_PATH"
-          "$dir/trivy" --version
+          env -u GH_TOKEN "$dir/trivy" --version
 
       - name: Scan filesystem (vuln + misconfig; secrets OFF per Q5)
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
