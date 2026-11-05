@@ -240,6 +240,16 @@ jobs:
           toolchain: ${{ inputs.rust-version }}
           targets: ${{ matrix.target }}
 
+      - name: Add the target to the active Rust toolchain
+        # A caller's rust-toolchain.toml overrides the rust-version input, which is the
+        # only toolchain the step above gave the target. Run from the checkout, this adds
+        # it to whichever toolchain cargo will use.
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          rustup target add "$TARGET"
+          rustup show active-toolchain
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:

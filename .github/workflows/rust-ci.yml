@@ -75,6 +75,14 @@ jobs:
           toolchain: ${{ inputs.rust-version }}
           components: clippy, rustfmt
 
+      - name: Ready the active Rust toolchain
+        # A caller's rust-toolchain.toml overrides the rust-version input, and the step
+        # above put clippy and rustfmt only on the input. Run from the checkout, these
+        # land on whichever toolchain cargo will use, then name it and why.
+        run: |
+          rustup component add clippy rustfmt
+          rustup show active-toolchain
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
 
