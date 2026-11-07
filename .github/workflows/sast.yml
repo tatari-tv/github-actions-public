@@ -191,21 +191,28 @@ jobs:
 
       # Latest Trivy straight from the GitHub release, checksum-verified. The
       # action's own installer (setup-trivy) pulls the tarball from get.trivy.dev,
-      # which stopped resolving on 2026-11-03 (aquasecurity/trivy#11537) and fails
-      # every run that misses the binary cache with curl exit 6. No version is
-      # pinned on purpose: `gh release download` with no tag takes the latest.
+      # which stopped resolving on 2026-11-03 (aquasecurity/trivy#11537). The
+      # GitHub API route (`gh release download`) is refused too: the aquasecurity
+      # org has an IP allow list, so an authenticated API call from a hosted
+      # runner gets HTTP 403. This step uses only github.com web URLs with no
+      # token: the releases/latest redirect names the tag, and the asset URLs
+      # under releases/download serve the files. No version is pinned on purpose.
       - name: Install Trivy (latest GitHub release)
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          base=https://github.com/aquasecurity/trivy/releases
+          tag=$(curl -fsSI -o /dev/null -w '%{redirect_url}' "$base/latest")
+          tag=${tag##*/}
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected latest tag: '$tag'" >&2; exit 1; }
+          ver=${tag#v}
           dir="$RUNNER_TEMP/trivy"
           mkdir -p "$dir"
-          gh release download --repo aquasecurity/trivy --dir "$dir" \
-            --pattern 'trivy_*_Linux-64bit.tar.gz' \
-            --pattern 'trivy_*_checksums.txt'
-          (cd "$dir" && grep ' trivy_.*_Linux-64bit\.tar\.gz$' trivy_*_checksums.txt | sha256sum -c -)
-          tar -xzf "$dir"/trivy_*_Linux-64bit.tar.gz -C "$dir" trivy
+          tarball="trivy_${ver}_Linux-64bit.tar.gz"
+          sums="trivy_${ver}_checksums.txt"
+          curl -fsSL --retry 3 -o "$dir/$tarball" "$base/download/$tag/$tarball"
+          curl -fsSL --retry 3 -o "$dir/$sums" "$base/download/$tag/$sums"
+          (cd "$dir" && grep " $tarball\$" "$sums" | sha256sum -c -)
+          tar -xzf "$dir/$tarball" -C "$dir" trivy
           echo "$dir" >> "$GITHUB_PATH"
           "$dir/trivy" --version
 
