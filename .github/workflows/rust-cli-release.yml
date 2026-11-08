@@ -90,7 +90,7 @@ jobs:
         if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         shell: bash
         run: |
-          v="$(python3 -c 'import sys,tomllib; d=tomllib.load(open("Cargo.toml","rb")); print(d.get("workspace",{}).get("package",{}).get("version") or d.get("package",{}).get("version") or "")')"
+          v="$(python3 -c 'import sys,tomllib; d=tomllib.load(open("Cargo.toml","rb")); p=d.get("package",{}).get("version"); print((p if isinstance(p,str) else "") or d.get("workspace",{}).get("package",{}).get("version") or "")')"
           [ -n "$v" ] || { echo "::error::root Cargo.toml has no [workspace.package] or [package] version"; exit 1; }
           [ "$GITHUB_REF_NAME" = "v$v" ] || { echo "::error::tag $GITHUB_REF_NAME != Cargo.toml v$v"; exit 1; }
       # yamllint enable rule:line-length
