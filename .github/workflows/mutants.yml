@@ -284,6 +284,8 @@ jobs:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ needs.plan.outputs.sha }}
+          # Full history and tags: build_version::emit() runs `git describe` from build.rs.
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Download plan
