@@ -132,7 +132,7 @@ jobs:
           [ "$(uname -m)" = x86_64 ] || { echo "::error::cargo-mutants ships only an x86_64-unknown-linux-gnu prebuilt; runner is $(uname -m)"; exit 1; }
           url="https://github.com/sourcefrog/cargo-mutants/releases/download/v${MUTANTS_VERSION}/cargo-mutants-x86_64-unknown-linux-gnu.tar.gz"
           echo "downloading $url"
-          curl -fsSL "$url" -o /tmp/cargo-mutants.tar.gz
+          curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused "$url" -o /tmp/cargo-mutants.tar.gz
           echo "${MUTANTS_SHA256}  /tmp/cargo-mutants.tar.gz" | sha256sum -c -
           tar -xzf /tmp/cargo-mutants.tar.gz -C "$HOME/.cargo/bin" cargo-mutants
           cargo mutants --version
@@ -330,7 +330,7 @@ jobs:
           esac
           url="https://github.com/tatari-tv/whitespace/releases/download/${WS_VERSION}/whitespace-${WS_VERSION}-${ws_suffix}.tar.gz"
           echo "downloading $url"
-          curl -fsSL "$url" -o /tmp/whitespace.tar.gz
+          curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused "$url" -o /tmp/whitespace.tar.gz
           sudo tar -xzf /tmp/whitespace.tar.gz -C /usr/local/bin whitespace
           whitespace --version
 
@@ -347,7 +347,7 @@ jobs:
           esac
           url="https://github.com/eza-community/eza/releases/download/${EZA_VERSION}/eza_${eza_target}.tar.gz"
           echo "downloading $url"
-          curl -fsSL "$url" -o /tmp/eza.tar.gz
+          curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused "$url" -o /tmp/eza.tar.gz
           sudo tar -xzf /tmp/eza.tar.gz -C /usr/local/bin ./eza
           eza --version
 
@@ -359,7 +359,7 @@ jobs:
           [ "$(uname -m)" = x86_64 ] || { echo "::error::cargo-mutants ships only an x86_64-unknown-linux-gnu prebuilt; runner is $(uname -m)"; exit 1; }
           url="https://github.com/sourcefrog/cargo-mutants/releases/download/v${MUTANTS_VERSION}/cargo-mutants-x86_64-unknown-linux-gnu.tar.gz"
           echo "downloading $url"
-          curl -fsSL "$url" -o /tmp/cargo-mutants.tar.gz
+          curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused "$url" -o /tmp/cargo-mutants.tar.gz
           echo "${MUTANTS_SHA256}  /tmp/cargo-mutants.tar.gz" | sha256sum -c -
           tar -xzf /tmp/cargo-mutants.tar.gz -C "$HOME/.cargo/bin" cargo-mutants
           cargo mutants --version
