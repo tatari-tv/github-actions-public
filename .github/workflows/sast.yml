@@ -201,7 +201,7 @@ jobs:
         run: |
           set -euo pipefail
           base=https://github.com/aquasecurity/trivy/releases
-          tag=$(curl -fsSI -o /dev/null -w '%{redirect_url}' "$base/latest")
+          tag=$(curl -fsSI --retry 5 --retry-delay 2 --retry-connrefused -o /dev/null -w '%{redirect_url}' "$base/latest")
           tag=${tag##*/}
           [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "unexpected latest tag: '$tag'" >&2; exit 1; }
           ver=${tag#v}
@@ -209,8 +209,8 @@ jobs:
           mkdir -p "$dir"
           tarball="trivy_${ver}_Linux-64bit.tar.gz"
           sums="trivy_${ver}_checksums.txt"
-          curl -fsSL --retry 3 -o "$dir/$tarball" "$base/download/$tag/$tarball"
-          curl -fsSL --retry 3 -o "$dir/$sums" "$base/download/$tag/$sums"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused -o "$dir/$tarball" "$base/download/$tag/$tarball"
+          curl -fsSL --retry 5 --retry-delay 2 --retry-connrefused -o "$dir/$sums" "$base/download/$tag/$sums"
           (cd "$dir" && grep " $tarball\$" "$sums" | sha256sum -c -)
           tar -xzf "$dir/$tarball" -C "$dir" trivy
           echo "$dir" >> "$GITHUB_PATH"
